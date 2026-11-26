@@ -1109,7 +1109,7 @@ function normalize(d) {
 /* ================================================================== boot */
 // Login: every time the form is shown it gets a fresh form token from /api/session (the server
 // refuses logins sent without one, or less than 2 s after it was issued — typical of bots).
-const LOGIN = { form: null, turnstile: null, widget: null };
+const LOGIN = { form: null, formAt: 0, turnstile: null, widget: null };
 // (checks for .render: an element with id="turnstile" would also show up as window.turnstile)
 const turnstileApi = () => (window.turnstile && typeof window.turnstile.render === "function" ? window.turnstile : null);
 function loadTurnstile() {
@@ -1127,6 +1127,7 @@ async function showLogin(msg, sess) {
   try {
     const s = sess || await api("session");
     LOGIN.form = s.form;
+    LOGIN.formAt = Date.now();
     $("#totp-field").hidden = !s.totp;
     $("#code").required = !!s.totp;
     if (s.turnstileSiteKey) {
@@ -1144,6 +1145,14 @@ $("#login-form").addEventListener("submit", async (e) => {
   $("#login-err").textContent = "";
   btn.disabled = true;
   try {
+    // A page opened before the panel was configured has no form token yet: fetch one first
+    if (!LOGIN.form) await showLogin();
+    if (!LOGIN.form) throw new Error("O painel ainda não foi configurado no Cloudflare.");
+    // The Turnstile box must finish before sending (otherwise the try would count as a failure)
+    if (LOGIN.widget != null && !LOGIN.turnstile) throw new Error("Aguarde a verificação da Cloudflare terminar (a caixinha acima) e clique de novo.");
+    // The server refuses logins sent less than 2 s after the form token: wait instead of failing
+    const wait = LOGIN.formAt + 2300 - Date.now();
+    if (wait > 0) { btn.textContent = "Entrando…"; await new Promise((r) => setTimeout(r, wait)); }
     await api("login", { method: "POST", body: JSON.stringify({
       password: $("#pw").value, code: $("#code").value, form: LOGIN.form,
       website: $("#website").value, turnstile: LOGIN.turnstile,
@@ -1154,7 +1163,7 @@ $("#login-form").addEventListener("submit", async (e) => {
     $("#login-err").textContent = err.message;
     $("#code").value = "";
     await showLogin(); // new form token (and a new Turnstile challenge) for the next try
-  } finally { btn.disabled = false; }
+  } finally { btn.disabled = false; btn.textContent = "Entrar"; }
 });
 
 async function start() {

@@ -41,7 +41,13 @@ export async function onRequestPost({ request, env, data }) {
   const ft = await checkFormToken(env, form);
   if (ft !== "ok") {
     if (ft === "expired") { await slow(); return fail(400, "A página ficou aberta tempo demais. Recarregue e tente de novo."); }
-    return refuse("honeypot", ft === "too_fast" ? "enviado rápido demais" : "sem token de formulário", ft === "too_fast" ? 3 : 5);
+    // Counts as one failure only: without a valid token the password is never checked, so there is
+    // nothing to gain by guessing, and a page left open while the secrets changed must not lock anyone out
+    await audit(env, request, "honeypot", ft === "too_fast" ? "enviado rápido demais" : "token de formulário ausente ou de outra configuração");
+    const r = await registerFailure(env, ip, 1);
+    await slow();
+    if (r.locked) return fail(429, `Muitas tentativas. Tente de novo em ${minutes(r.retryIn)} min.`);
+    return fail(400, "A página do painel está desatualizada. Recarregue (F5) e tente de novo.");
   }
   if (!(await verifyTurnstile(env, turnstile, ip))) return refuse("login_fail", "verificação anti-robô falhou");
   if (!(await safeEqual(password, env.ADMIN_PASSWORD))) return refuse("login_fail", "senha incorreta");
